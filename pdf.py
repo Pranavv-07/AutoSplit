@@ -215,6 +215,17 @@ if uploaded_file is not None:
     else:
         st.success(f"File '{uploaded_file.name}' loaded successfully ({file_size_mb:.2f}MB).")
         
+        # --- ROLL NUMBER RANGE FILTER UI ---
+        st.markdown("### Filter by Roll Number (Optional)")
+        st.write("Specify a range to download papers only for specific students. Leave blank to process all.")
+        col1, col2 = st.columns(2)
+        with col1:
+            start_roll = st.text_input("Start Roll Number", placeholder="e.g., 24B11CS001").strip().upper()
+        with col2:
+            end_roll = st.text_input("End Roll Number", placeholder="e.g., 24B11CS200").strip().upper()
+        
+        st.divider()
+
         if st.session_state.zip_buffer is None:
             if st.button("Split Now ✂️", type="secondary"):
                 
@@ -226,10 +237,10 @@ if uploaded_file is not None:
                     progress_bar = st.progress(0)
                     status_text = st.empty()
                     
-                  
                     total_pages = 0
                     created_pdfs = 0
                     skipped_pages = []
+                    out_of_range_pages = []
                     duplicates_handled = 0
                     
                     roll_number_counts = {}
@@ -251,26 +262,36 @@ if uploaded_file is not None:
                                 roll_number = find_roll_number(text)
                                 
                                 if roll_number:
-                                    # 2. Handle Duplicates
-                                    if roll_number in roll_number_counts:
-                                        roll_number_counts[roll_number] += 1
-                                        duplicates_handled += 1
-                                        final_roll_number = f"{roll_number}_{roll_number_counts[roll_number]}"
+                                    # 2. Check if the Roll Number is within the specified range
+                                    in_range = True
+                                    if start_roll and roll_number < start_roll:
+                                        in_range = False
+                                    if end_roll and roll_number > end_roll:
+                                        in_range = False
+                                        
+                                    if in_range:
+                                        # 3. Handle Duplicates
+                                        if roll_number in roll_number_counts:
+                                            roll_number_counts[roll_number] += 1
+                                            duplicates_handled += 1
+                                            final_roll_number = f"{roll_number}_{roll_number_counts[roll_number]}"
+                                        else:
+                                            roll_number_counts[roll_number] = 0
+                                            final_roll_number = roll_number
+                                        
+                                        # 4. Save as individual PDF
+                                        output_filename = f"{final_roll_number}.pdf"
+                                        output_filepath = os.path.join(temp_dir, output_filename)
+                                        
+                                        # Create a new PDF with just this page
+                                        new_pdf = fitz.open()
+                                        new_pdf.insert_pdf(pdf_document, from_page=page_num, to_page=page_num)
+                                        new_pdf.save(output_filepath)
+                                        new_pdf.close()
+                                        
+                                        created_pdfs += 1
                                     else:
-                                        roll_number_counts[roll_number] = 0
-                                        final_roll_number = roll_number
-                                    
-                                    # 3. Save as individual PDF
-                                    output_filename = f"{final_roll_number}.pdf"
-                                    output_filepath = os.path.join(temp_dir, output_filename)
-                                    
-                                    # Create a new PDF with just this page
-                                    new_pdf = fitz.open()
-                                    new_pdf.insert_pdf(pdf_document, from_page=page_num, to_page=page_num)
-                                    new_pdf.save(output_filepath)
-                                    new_pdf.close()
-                                    
-                                    created_pdfs += 1
+                                        out_of_range_pages.append(page_num + 1)
                                 else:
                                     skipped_pages.append(page_num + 1)
                                 
@@ -281,7 +302,7 @@ if uploaded_file is not None:
                             
                             pdf_document.close()
                             
-                            # 4. Create ZIP archive in memory
+                            # 5. Create ZIP archive in memory
                             status_text.info("Creating ZIP archive...")
                             zip_buffer = io.BytesIO()
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -299,6 +320,7 @@ if uploaded_file is not None:
                                 "total": total_pages,
                                 "created": created_pdfs,
                                 "skipped": skipped_pages,
+                                "out_of_range": len(out_of_range_pages),
                                 "duplicates": duplicates_handled
                             }
                             
@@ -314,25 +336,29 @@ if uploaded_file is not None:
             
             st.divider()
             st.subheader("Details")
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Total Pages", summary["total"])
-            col2.metric("PDFs Created", summary["created"])
-            col3.metric("Skipped Pages", len(summary["skipped"]))
-            col4.metric("Duplicates Handled", summary["duplicates"])
+            col2.metric("PDFs Zipped", summary["created"])
+            col3.metric("Out of Range", summary["out_of_range"])
+            col4.metric("No Roll Found", len(summary["skipped"]))
+            col5.metric("Duplicates", summary["duplicates"])
             
             if summary["skipped"]:
                 with st.expander("⚠️ View Skipped Pages (No Roll Number Found)"):
                     st.write(f"Pages: {', '.join(map(str, summary['skipped']))}")
             
-            st.divider()
-            st.download_button(
-                label="⬇️ Download All PDFs (ZIP)",
-                data=st.session_state.zip_buffer,
-                file_name="split_student_pdfs.zip",
-                mime="application/zip",
-                type="primary",
-                use_container_width=True
-            )
+            if summary["created"] > 0:
+                st.divider()
+                st.download_button(
+                    label="⬇️ Download Selected Papers (ZIP)",
+                    data=st.session_state.zip_buffer,
+                    file_name="filtered_student_papers.zip",
+                    mime="application/zip",
+                    type="primary",
+                    use_container_width=True
+                )
+            else:
+                st.warning("No papers matched the given roll number range. Nothing to download.")
 
 # --- FOOTER ---
 st.markdown(
