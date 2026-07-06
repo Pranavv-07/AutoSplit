@@ -2,9 +2,7 @@ name: Keep Streamlit Awake
 
 on:
   schedule:
-    # Runs every 25 minutes
-    - cron: "*/25 * * * *"
-
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -14,4 +12,4 @@ jobs:
     steps:
       - name: Ping Streamlit
         run: |
-          curl -L https://autosplit.streamlit.app/
+          curl -v -L https://autosplit.streamlit.app/
