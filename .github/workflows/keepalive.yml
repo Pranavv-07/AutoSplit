@@ -10,10 +10,47 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Wake Streamlit
+      - name: Show current time
+        run: date
+
+      - name: Check DNS resolution
         run: |
-          curl --fail --silent --show-error \
-               --location \
-               --max-time 60 \
-               --user-agent "GitHub-Actions-KeepAlive" \
-               https://autosplit.streamlit.app/
+          echo "Resolving hostname..."
+          nslookup autosplit.streamlit.app || true
+
+      - name: Check HTTP headers
+        run: |
+          echo "Checking HTTP headers..."
+          curl -I https://autosplit.streamlit.app/ || true
+
+      - name: Follow redirects (Verbose)
+        run: |
+          echo "Following redirects..."
+          curl -v -L \
+            --max-redirs 20 \
+            --connect-timeout 30 \
+            --max-time 60 \
+            https://autosplit.streamlit.app/ || true
+
+      - name: Check final URL
+        run: |
+          echo "Checking final destination..."
+          curl -Ls -o /dev/null -w "Final URL: %{url_effective}\nHTTP Status: %{http_code}\nRedirects: %{num_redirects}\n" \
+          https://autosplit.streamlit.app/ || true
+
+      - name: Verify app response
+        run: |
+          echo "Downloading page..."
+          curl -L https://autosplit.streamlit.app/ -o response.html || true
+
+          echo "========== First 100 lines of response =========="
+          head -100 response.html || true
+
+          echo "==============================================="
+
+      - name: Success message
+        run: |
+          echo "Workflow completed."
+
+
+          
