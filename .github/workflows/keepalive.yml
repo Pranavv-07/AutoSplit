@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Ping Streamlit
+      - name: Wake Streamlit
         run: |
-          curl -v -L https://autosplit.streamlit.app/
+          curl --fail --silent --show-error \
+               --location \
+               --max-time 60 \
+               --user-agent "GitHub-Actions-KeepAlive" \
+               https://autosplit.streamlit.app/
