@@ -2,7 +2,8 @@ name: Keep Streamlit Awake
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Note: */25 runs at minute 0,25,50 each hour (approximate 25-minute cadence).
+    - cron: "*/25 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -13,44 +14,90 @@ jobs:
       - name: Show current time
         run: date
 
-      - name: Check DNS resolution
+      - name: Warm app with HTTP retry
         run: |
-          echo "Resolving hostname..."
-          nslookup autosplit.streamlit.app || true
+          curl -L \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 20 \
+            --max-time 90 \
+            -o /tmp/response.html \
+            https://autosplit.streamlit.app/
+          echo "Final URL and HTTP status:"
+          curl -Ls -o /dev/null -w "Final URL: %{url_effective}\nHTTP Status: %{http_code}\n" https://autosplit.streamlit.app/
 
-      - name: Check HTTP headers
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright
         run: |
-          echo "Checking HTTP headers..."
-          curl -I https://autosplit.streamlit.app/ || true
+          npm init -y >/dev/null 2>&1
+          npm install playwright@1.55.0
+          npx playwright install --with-deps chromium
 
-      - name: Follow redirects (Verbose)
+      - name: Click wake button if sleep screen is shown
         run: |
-          echo "Following redirects..."
-          curl -v -L \
-            --max-redirs 20 \
-            --connect-timeout 30 \
-            --max-time 60 \
-            https://autosplit.streamlit.app/ || true
+          node <<'EOF'
+          const { chromium } = require('playwright');
 
-      - name: Check final URL
-        run: |
-          echo "Checking final destination..."
-          curl -Ls -o /dev/null -w "Final URL: %{url_effective}\nHTTP Status: %{http_code}\nRedirects: %{num_redirects}\n" \
-          https://autosplit.streamlit.app/ || true
+          const APP_URL = 'https://autosplit.streamlit.app/';
+          const SLEEP_PATTERNS = /wake application|sleep mode|app is sleeping|application is sleeping/i;
+          const MAX_ATTEMPTS = 3;
 
-      - name: Verify app response
-        run: |
-          echo "Downloading page..."
-          curl -L https://autosplit.streamlit.app/ -o response.html || true
+          async function run() {
+            const browser = await chromium.launch({ headless: true });
+            const page = await browser.newPage();
+            page.setDefaultTimeout(30000);
 
-          echo "========== First 100 lines of response =========="
-          head -100 response.html || true
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              try {
+                console.log(`Attempt ${attempt}/${MAX_ATTEMPTS}: opening app`);
+                await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await page.waitForTimeout(5000);
 
-          echo "==============================================="
+                const bodyText = await page.locator('body').innerText();
+                const isSleeping = SLEEP_PATTERNS.test(bodyText);
+
+                if (!isSleeping) {
+                  console.log('App appears awake, no wake click needed.');
+                  await browser.close();
+                  return;
+                }
+
+                console.log('Sleep screen detected, trying wake button click...');
+                const wakeButton = page.getByRole('button', { name: /wake application|wake/i }).first();
+                if (await wakeButton.count()) {
+                  await wakeButton.click({ timeout: 15000 });
+                  await page.waitForTimeout(12000);
+                  const afterClickText = await page.locator('body').innerText();
+                  if (!SLEEP_PATTERNS.test(afterClickText)) {
+                    console.log('Wake button clicked and app appears awake.');
+                    await browser.close();
+                    return;
+                  }
+                  console.log('Wake click did not clear sleep screen yet.');
+                } else {
+                  console.log('Wake button not found on sleep screen.');
+                }
+              } catch (error) {
+                console.log(`Attempt ${attempt} failed: ${error.message}`);
+              }
+            }
+
+            await browser.close();
+            throw new Error('App still appears asleep after retries.');
+          }
+
+          run().catch((error) => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          EOF
 
       - name: Success message
-        run: |
-          echo "Workflow completed."
+        run: echo "Workflow completed."
 
 
           
